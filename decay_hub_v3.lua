@@ -1,4 +1,4 @@
--- DECAY HUB V3 / MINIMAL EDITION
+-- TESTDECAY HUB V3 / MINIMAL EDITION
 -- Single LocalScript. Recommended location: StarterPlayerScripts.
 -- Tabs: Home, Visuals (ESP), Players (ESP), Utility (Auto Harvest + Auto Research), Aim (Aimlock + Hitbox), Config.
 -- No login: the hub opens immediately. RightShift shows / hides the window.
