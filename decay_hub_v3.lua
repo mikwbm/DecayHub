@@ -2,6 +2,7 @@
 -- Single LocalScript. Recommended location: StarterPlayerScripts.
 -- Tabs: Home, Visuals (ESP), Players (ESP), Utility (Auto Harvest + Auto Research), Aim (Aimlock + Hitbox), Config.
 -- No login: the hub opens immediately. RightShift shows / hides the window.
+-- Modern sidebar UI + animated loading screen on launch.
 -- Includes a draggable player radar (size + range sliders on the Config tab).
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -104,14 +105,15 @@ local function themedButton(parent, text, accent)
 end
 
 ----------------------------------------------------------------------
--- Window
+-- Window (modern layout: sidebar + content)
 ----------------------------------------------------------------------
 local screen=make("ScreenGui",{Name="DecayHubV3",ResetOnSpawn=false,IgnoreGuiInset=true,DisplayOrder=60,ZIndexBehavior=Enum.ZIndexBehavior.Sibling},guiParent)
-local WIN_W,WIN_H=320,380
-local TAB_COUNT=6
+local WIN_W,WIN_H=580,400
+local SIDE_W=136
 screen.Destroying:Connect(function() for _,c in ipairs(conns) do pcall(function() c:Disconnect() end) end end)
 local window=tint(make("Frame",{Name="Main",AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.52),Size=UDim2.fromOffset(WIN_W,WIN_H),BorderSizePixel=0,Visible=false,ClipsDescendants=true},screen),"bg")
-rounded(window,10); outline(window)
+rounded(window,16); outline(window)
+make("UIGradient",{Rotation=120,Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,0),NumberSequenceKeypoint.new(1,.1)})},window)
 local scale=make("UIScale",{Scale=1},window)
 local function resizeScale()
     local cam=workspace.CurrentCamera
@@ -122,18 +124,43 @@ end
 resizeScale()
 if workspace.CurrentCamera then on(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"),resizeScale) end
 
-tint(make("Frame",{Size=UDim2.new(1,0,0,2),BorderSizePixel=0,ZIndex=3},window),"accent")
-local top=make("Frame",{Size=UDim2.new(1,0,0,30),BackgroundTransparency=1},window)
-local dot=tint(make("Frame",{Position=UDim2.fromOffset(12,12),Size=UDim2.fromOffset(8,8),BorderSizePixel=0},top),"accent");rounded(dot,4)
-local brand=label(top,"DECAY HUB",12,true);brand.Position=UDim2.fromOffset(26,0);brand.Size=UDim2.new(1,-90,1,0)
-local minimize=themedButton(top,"—");minimize.Size=UDim2.fromOffset(22,18);minimize.Position=UDim2.new(1,-54,0,7)
-local xbtn=themedButton(top,"×");xbtn.Size=UDim2.fromOffset(22,18);xbtn.Position=UDim2.new(1,-28,0,7)
-local nav=make("Frame",{Position=UDim2.fromOffset(8,32),Size=UDim2.fromOffset(WIN_W-16,22),BackgroundTransparency=1},window)
-make("UIListLayout",{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,2),SortOrder=Enum.SortOrder.LayoutOrder},nav)
-tint(make("Frame",{Position=UDim2.fromOffset(8,57),Size=UDim2.fromOffset(WIN_W-16,1),BorderSizePixel=0},window),"line")
-local holder=make("Frame",{Position=UDim2.fromOffset(8,62),Size=UDim2.fromOffset(WIN_W-16,WIN_H-70),BackgroundTransparency=1},window)
-local toast=tint(make("Frame",{Position=UDim2.fromOffset(16,WIN_H-34),Size=UDim2.fromOffset(WIN_W-32,24),Visible=false,BorderSizePixel=0,ZIndex=15},window),"elevated");rounded(toast,6);outline(toast)
-local toastText=label(toast,"",10,true);toastText.Position=UDim2.fromOffset(10,0);toastText.Size=UDim2.new(1,-20,1,0);toastText.ZIndex=16
+-- Sidebar ------------------------------------------------------------
+local sidebar=tint(make("Frame",{Name="Sidebar",Size=UDim2.new(0,SIDE_W,1,0),BorderSizePixel=0},window),"side")
+rounded(sidebar,16)
+tint(make("Frame",{Position=UDim2.new(1,-16,0,0),Size=UDim2.new(0,16,1,0),BorderSizePixel=0},sidebar),"side") -- squares off the right edge
+tint(make("Frame",{Position=UDim2.new(1,-1,0,0),Size=UDim2.new(0,1,1,0),BorderSizePixel=0,BackgroundTransparency=.45},sidebar),"line")
+local logo=tint(make("Frame",{Position=UDim2.fromOffset(14,13),Size=UDim2.fromOffset(28,28),BorderSizePixel=0},sidebar),"accent");rounded(logo,9)
+make("UIGradient",{Rotation=45,Color=ColorSequence.new(Color3.new(1,1,1),Color3.fromRGB(175,175,185))},logo)
+local logoGlyph=label(logo,"D",14,true,"bg");logoGlyph.Size=UDim2.fromScale(1,1);logoGlyph.TextXAlignment=Enum.TextXAlignment.Center
+local brand=label(sidebar,"DECAY",13,true);brand.Position=UDim2.fromOffset(50,11);brand.Size=UDim2.new(1,-58,0,16)
+local brandSub=label(sidebar,"HUB  ·  V3",9,true,"accent");brandSub.Position=UDim2.fromOffset(50,27);brandSub.Size=UDim2.new(1,-58,0,12)
+local sideHead=make("Frame",{Size=UDim2.new(1,0,0,52),BackgroundTransparency=1,ZIndex=3},sidebar) -- drag zone
+local nav=make("Frame",{Position=UDim2.fromOffset(8,62),Size=UDim2.new(1,-16,1,-136),BackgroundTransparency=1},sidebar)
+make("UIListLayout",{Padding=UDim.new(0,4),SortOrder=Enum.SortOrder.LayoutOrder},nav)
+
+local profile=tint(make("Frame",{Position=UDim2.new(0,8,1,-60),Size=UDim2.new(1,-16,0,48),BorderSizePixel=0},sidebar),"card");rounded(profile,11);outline(profile)
+local avatar=tint(make("ImageLabel",{Position=UDim2.fromOffset(8,8),Size=UDim2.fromOffset(32,32),BorderSizePixel=0},profile),"elevated");rounded(avatar,16)
+task.spawn(function()
+    local ok,img=pcall(function()
+        return Players:GetUserThumbnailAsync(player.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size100x100)
+    end)
+    if ok and avatar.Parent then avatar.Image=img end
+end)
+local pname=label(profile,player.DisplayName,11,true);pname.Position=UDim2.fromOffset(47,8);pname.Size=UDim2.new(1,-53,0,16)
+local pstat=label(profile,"@"..player.Name,9,false,"muted");pstat.Position=UDim2.fromOffset(47,24);pstat.Size=UDim2.new(1,-53,0,14)
+
+-- Top bar (page title + window buttons) ---------------------------------
+local top=make("Frame",{Size=UDim2.new(1,0,0,50),BackgroundTransparency=1,ZIndex=4},window)
+local pageTitle=label(top,"Home",16,true);pageTitle.Position=UDim2.fromOffset(SIDE_W+18,2);pageTitle.Size=UDim2.new(1,-(SIDE_W+110),1,-2);pageTitle.ZIndex=5
+local minimize=themedButton(top,"—");minimize.Size=UDim2.fromOffset(30,22);minimize.Position=UDim2.new(1,-72,0,14);minimize.ZIndex=5
+local xbtn=themedButton(top,"×");xbtn.Size=UDim2.fromOffset(30,22);xbtn.Position=UDim2.new(1,-38,0,14);xbtn.ZIndex=5
+local strip=tint(make("Frame",{Position=UDim2.fromOffset(SIDE_W+16,0),Size=UDim2.new(1,-(SIDE_W+32),0,2),BorderSizePixel=0,ZIndex=6},window),"accent");rounded(strip,1)
+make("UIGradient",{Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,0),NumberSequenceKeypoint.new(1,.85)})},strip)
+tint(make("Frame",{Position=UDim2.fromOffset(SIDE_W+14,50),Size=UDim2.new(1,-(SIDE_W+28),0,1),BorderSizePixel=0,BackgroundTransparency=.5},window),"line")
+
+local holder=make("Frame",{Position=UDim2.fromOffset(SIDE_W+14,58),Size=UDim2.new(1,-(SIDE_W+28),1,-70),BackgroundTransparency=1},window)
+local toast=tint(make("Frame",{AnchorPoint=Vector2.new(.5,1),Position=UDim2.new(0,SIDE_W+(WIN_W-SIDE_W)/2,1,-14),Size=UDim2.fromOffset(280,30),Visible=false,BorderSizePixel=0,ZIndex=15},window),"elevated");rounded(toast,15);outline(toast)
+local toastText=label(toast,"",10,true);toastText.Position=UDim2.fromOffset(14,0);toastText.Size=UDim2.new(1,-28,1,0);toastText.ZIndex=16;toastText.TextXAlignment=Enum.TextXAlignment.Center
 local toastCounter=0
 local function notify(message)
     toastCounter+=1
@@ -143,81 +170,91 @@ local function notify(message)
 end
 
 ----------------------------------------------------------------------
--- UI components (compact rows, same look as the aimlock window)
+-- UI components (modern cards, pill toggles, knob sliders)
 ----------------------------------------------------------------------
 local UI={}; local pages={};local navItems={};local activePage
 local function row(parent,h)
-    local f=tint(make("Frame",{Size=UDim2.new(1,0,0,h or 28),BorderSizePixel=0},parent),"card")
-    rounded(f,6)
+    local f=tint(make("Frame",{Size=UDim2.new(1,0,0,h or 34),BorderSizePixel=0},parent),"card")
+    rounded(f,9); outline(f)
     return f
 end
 function UI.Page(name, glyph, description)
-    local button=make("TextButton",{Text=name,Font=Enum.Font.GothamBold,TextSize=10,AutoButtonColor=false,BorderSizePixel=0,BackgroundTransparency=1,Size=UDim2.new(1/TAB_COUNT,-2,1,0)},nav)
-    tint(button,"elevated");skin(button,"TextColor3","muted");rounded(button,6)
-    local page=make("ScrollingFrame",{Name=name.."Page",Size=UDim2.new(1,0,1,-38),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=2,CanvasSize=UDim2.fromOffset(0,0),AutomaticCanvasSize=Enum.AutomaticSize.Y,Visible=false},holder)
+    local button=make("TextButton",{Text="",AutoButtonColor=false,BorderSizePixel=0,BackgroundTransparency=1,Size=UDim2.new(1,0,0,34)},nav)
+    tint(button,"elevated");rounded(button,9)
+    local bar=tint(make("Frame",{Position=UDim2.fromOffset(0,8),Size=UDim2.fromOffset(3,18),BorderSizePixel=0,BackgroundTransparency=1},button),"accent");rounded(bar,2)
+    local txt=label(button,name,12,true,"muted");txt.Position=UDim2.fromOffset(16,0);txt.Size=UDim2.new(1,-20,1,0)
+    local page=make("ScrollingFrame",{Name=name.."Page",Size=UDim2.fromScale(1,1),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,CanvasSize=UDim2.fromOffset(0,0),AutomaticCanvasSize=Enum.AutomaticSize.Y,Visible=false},holder)
     skin(page,"ScrollBarImageColor3","accent")
-    make("UIListLayout",{Padding=UDim.new(0,4),SortOrder=Enum.SortOrder.LayoutOrder},page)
-    make("UIPadding",{PaddingRight=UDim.new(0,4),PaddingBottom=UDim.new(0,4)},page)
+    make("UIListLayout",{Padding=UDim.new(0,6),SortOrder=Enum.SortOrder.LayoutOrder},page)
+    make("UIPadding",{PaddingRight=UDim.new(0,8),PaddingBottom=UDim.new(0,10)},page)
     pages[name]={page=page}
-    navItems[name]=button
+    navItems[name]={button=button,text=txt,bar=bar}
+    button.MouseEnter:Connect(function() if activePage~=name then animate(button,{BackgroundTransparency=.75},.15) end end)
+    button.MouseLeave:Connect(function() if activePage~=name then animate(button,{BackgroundTransparency=1},.15) end end)
     button.MouseButton1Click:Connect(function() UI.Switch(name) end)
     return page
 end
 function UI.Switch(name)
     if not pages[name] then return end
     activePage=name
+    pageTitle.Text=name
     for key,record in pairs(pages) do record.page.Visible=key==name end
-    for key,button in pairs(navItems) do
+    for key,item in pairs(navItems) do
         local chosen=key==name
-        setToken(button,"TextColor3",chosen and "accent" or "muted")
-        animate(button,{BackgroundTransparency=chosen and 0 or 1,TextColor3=chosen and theme.accent or theme.muted},.18)
+        setToken(item.text,"TextColor3",chosen and "accent" or "muted")
+        animate(item.text,{TextColor3=chosen and theme.accent or theme.muted},.18)
+        animate(item.button,{BackgroundTransparency=chosen and .35 or 1},.18)
+        animate(item.bar,{BackgroundTransparency=chosen and 0 or 1},.18)
     end
     pages[name].page.CanvasPosition=Vector2.zero
 end
 function UI.Title(parent,text,detail)
-    local l=label(parent,string.upper(text),9,true,"muted")
-    l.Size=UDim2.new(1,0,0,16)
-    return l
+    local f=make("Frame",{Size=UDim2.new(1,0,0,22),BackgroundTransparency=1},parent)
+    local bar=tint(make("Frame",{Position=UDim2.new(0,2,.5,-1),Size=UDim2.fromOffset(10,2),BorderSizePixel=0},f),"accent");rounded(bar,1)
+    local l=label(f,string.upper(text),10,true,"muted");l.Position=UDim2.fromOffset(18,0);l.Size=UDim2.new(1,-18,1,0)
+    return f
 end
 function UI.Card(parent,title,desc,tag)
     local f=row(parent)
-    local a=label(f,title,11,false);a.Position=UDim2.fromOffset(10,0);a.Size=UDim2.new(1,-110,1,0)
+    local a=label(f,title,11,false);a.Position=UDim2.fromOffset(12,0);a.Size=UDim2.new(1,-120,1,0)
     if tag then
-        local t=label(f,tag,9,true,"accent");t.Position=UDim2.new(1,-100,0,0);t.Size=UDim2.fromOffset(90,28);t.TextXAlignment=Enum.TextXAlignment.Right
+        local t=label(f,tag,9,true,"accent");t.Position=UDim2.new(1,-108,0,0);t.Size=UDim2.fromOffset(96,34);t.TextXAlignment=Enum.TextXAlignment.Right
     end
     return f
 end
 function UI.Toggle(parent,title,desc,onChange,initial)
     local f=row(parent)
-    local l=label(f,title,11,false);l.Position=UDim2.fromOffset(10,0);l.Size=UDim2.new(1,-60,1,0)
+    local l=label(f,title,11,false);l.Position=UDim2.fromOffset(12,0);l.Size=UDim2.new(1,-66,1,0)
     local state=false
-    local track=tint(make("TextButton",{Position=UDim2.new(1,-42,.5,-8),Size=UDim2.fromOffset(32,16),Text="",AutoButtonColor=false,BorderSizePixel=0},f),"elevated");rounded(track,8)
-    local circle=tint(make("Frame",{Position=UDim2.fromOffset(3,3),Size=UDim2.fromOffset(10,10),BorderSizePixel=0},track),"muted");rounded(circle,5)
+    local hit=make("TextButton",{Text="",BackgroundTransparency=1,Size=UDim2.fromScale(1,1)},f)
+    local track=tint(make("TextButton",{Position=UDim2.new(1,-50,.5,-9),Size=UDim2.fromOffset(38,18),Text="",AutoButtonColor=false,BorderSizePixel=0,ZIndex=2},f),"elevated");rounded(track,9)
+    local circle=tint(make("Frame",{Position=UDim2.fromOffset(3,3),Size=UDim2.fromOffset(12,12),BorderSizePixel=0,ZIndex=3},track),"muted");rounded(circle,6)
     local function setState(value)
         state = not not value
         setToken(track,"BackgroundColor3",state and "accent" or "elevated")
         setToken(circle,"BackgroundColor3",state and "bg" or "muted")
         animate(track,{BackgroundColor3=state and theme.accent or theme.elevated},.18)
-        animate(circle,{Position=state and UDim2.fromOffset(19,3) or UDim2.fromOffset(3,3),BackgroundColor3=state and theme.bg or theme.muted},.18)
+        animate(circle,{Position=state and UDim2.fromOffset(23,3) or UDim2.fromOffset(3,3),BackgroundColor3=state and theme.bg or theme.muted},.18)
         if onChange then onChange(state) end
     end
     track.MouseButton1Click:Connect(function() setState(not state) end)
+    hit.MouseButton1Click:Connect(function() setState(not state) end)
     if initial then setState(true) end
     return f, setState
 end
 function UI.Action(parent,title,desc,action,buttonText)
     local f=row(parent)
-    local l=label(f,title,11,false);l.Position=UDim2.fromOffset(10,0);l.Size=UDim2.new(1,-90,1,0)
+    local l=label(f,title,11,false);l.Position=UDim2.fromOffset(12,0);l.Size=UDim2.new(1,-100,1,0)
     local b=themedButton(f,buttonText or "RUN",true)
-    b.Position=UDim2.new(1,-74,.5,-10);b.Size=UDim2.fromOffset(64,20)
+    b.Position=UDim2.new(1,-84,.5,-11);b.Size=UDim2.fromOffset(72,22)
     b.MouseButton1Click:Connect(function() if action then action(b) end end)
     return f,b
 end
 function UI.ButtonRow(parent,title,valueText,cb)
     local f=row(parent)
-    local l=label(f,title,11,false);l.Position=UDim2.fromOffset(10,0);l.Size=UDim2.new(1,-110,1,0)
+    local l=label(f,title,11,false);l.Position=UDim2.fromOffset(12,0);l.Size=UDim2.new(1,-120,1,0)
     local b=themedButton(f,valueText)
-    b.Position=UDim2.new(1,-94,.5,-10);b.Size=UDim2.fromOffset(84,20)
+    b.Position=UDim2.new(1,-104,.5,-11);b.Size=UDim2.fromOffset(92,22)
     b.MouseButton1Click:Connect(function() cb(b) end)
     return f,b
 end
@@ -231,14 +268,16 @@ function UI.Dropdown(parent,title,options,selected,callback)
     return b
 end
 function UI.Swatches(parent,title,presets,selected,callback)
-    local f=row(parent,40)
-    local l=label(f,title.."  ·  "..selected,11,false);l.Position=UDim2.fromOffset(10,3);l.Size=UDim2.new(1,-20,0,14)
-    local strip=make("Frame",{Position=UDim2.fromOffset(10,21),Size=UDim2.new(1,-20,0,16),BackgroundTransparency=1},f)
-    make("UIListLayout",{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,4)},strip)
+    local f=row(parent,50)
+    local l=label(f,title.."  ·  "..selected,11,false);l.Position=UDim2.fromOffset(12,5);l.Size=UDim2.new(1,-24,0,16)
+    local strip=make("Frame",{Position=UDim2.fromOffset(12,26),Size=UDim2.new(1,-24,0,20),BackgroundTransparency=1},f)
+    make("UIListLayout",{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,6)},strip)
     for _,p in ipairs(presets) do
-        local b=make("TextButton",{Text="",Size=UDim2.fromOffset(16,16),BackgroundColor3=p.accent,AutoButtonColor=false,BorderSizePixel=0},strip)
-        rounded(b,8)
+        local b=make("TextButton",{Text="",Size=UDim2.fromOffset(20,20),BackgroundColor3=p.accent,AutoButtonColor=false,BorderSizePixel=0},strip)
+        rounded(b,10)
         make("UIStroke",{Color=p.muted,Thickness=1,Transparency=.5},b)
+        b.MouseEnter:Connect(function() animate(b,{Size=UDim2.fromOffset(22,22)},.12) end)
+        b.MouseLeave:Connect(function() animate(b,{Size=UDim2.fromOffset(20,20)},.12) end)
         b.MouseButton1Click:Connect(function()
             l.Text=title.."  ·  "..p.name
             callback(p.name)
@@ -249,16 +288,19 @@ end
 local sliderDrag=nil
 function UI.Slider(parent,name,minV,maxV,initial,suffix,cb,step)
     step=step or 1
-    local f=row(parent,36)
-    local l=label(f,name,11,false);l.Position=UDim2.fromOffset(10,3);l.Size=UDim2.new(1,-80,0,16)
-    local val=label(f,"",10,true,"accent");val.Position=UDim2.new(1,-70,0,3);val.Size=UDim2.fromOffset(60,16);val.TextXAlignment=Enum.TextXAlignment.Right
-    local bar=tint(make("Frame",{Position=UDim2.fromOffset(10,26),Size=UDim2.new(1,-20,0,3),BorderSizePixel=0},f),"elevated");rounded(bar,2)
+    local f=row(parent,44)
+    local l=label(f,name,11,false);l.Position=UDim2.fromOffset(12,5);l.Size=UDim2.new(1,-90,0,16)
+    local val=label(f,"",10,true,"accent");val.Position=UDim2.new(1,-78,0,5);val.Size=UDim2.fromOffset(66,16);val.TextXAlignment=Enum.TextXAlignment.Right
+    local bar=tint(make("Frame",{Position=UDim2.fromOffset(12,31),Size=UDim2.new(1,-24,0,4),BorderSizePixel=0},f),"elevated");rounded(bar,2)
     local fill=tint(make("Frame",{Size=UDim2.fromScale(0,1),BorderSizePixel=0},bar),"accent");rounded(fill,2)
-    local hit=make("TextButton",{Text="",BackgroundTransparency=1,Position=UDim2.fromOffset(4,18),Size=UDim2.new(1,-8,0,16)},f)
+    local knob=tint(make("Frame",{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(0,.5),Size=UDim2.fromOffset(12,12),BorderSizePixel=0,ZIndex=2},bar),"text");rounded(knob,6)
+    local hit=make("TextButton",{Text="",BackgroundTransparency=1,Position=UDim2.fromOffset(6,22),Size=UDim2.new(1,-12,0,22)},f)
     local function set(v)
         v=minV+math.floor((v-minV)/step+.5)*step
         v=math.clamp(v,minV,maxV)
-        fill.Size=UDim2.fromScale((v-minV)/(maxV-minV),1)
+        local rel=(v-minV)/(maxV-minV)
+        fill.Size=UDim2.fromScale(rel,1)
+        knob.Position=UDim2.fromScale(rel,.5)
         val.Text=tostring(v)..(suffix or "")
         cb(v)
     end
@@ -291,9 +333,9 @@ function UI.Stepper(parent, title, minValue, maxValue, step, initialValue, callb
 end
 local function statusCard(parent, name, starting)
     local f=row(parent)
-    local a=label(f,name,11,false);a.Position=UDim2.fromOffset(10,0);a.Size=UDim2.new(.4,-10,1,0)
+    local a=label(f,name,11,false);a.Position=UDim2.fromOffset(12,0);a.Size=UDim2.new(.4,-12,1,0)
     local value=label(f,starting or "—",10,true,"accent")
-    value.Position=UDim2.new(.4,0,0,0);value.Size=UDim2.new(.6,-10,1,0);value.TextXAlignment=Enum.TextXAlignment.Right
+    value.Position=UDim2.new(.4,0,0,0);value.Size=UDim2.new(.6,-12,1,0);value.TextXAlignment=Enum.TextXAlignment.Right
     return value
 end
 
@@ -1685,10 +1727,11 @@ UI.Switch("Home")
 ----------------------------------------------------------------------
 -- Mini launcher, drag, login
 ----------------------------------------------------------------------
-local launcher=tint(make("TextButton",{Name="MiniLauncher",AnchorPoint=Vector2.new(.5,0),Position=UDim2.new(.5,0,0,6),Size=UDim2.fromOffset(110,24),Visible=false,Text="◆  DECAY HUB",Font=Enum.Font.GothamBold,TextSize=10,AutoButtonColor=false,BorderSizePixel=0},screen),"side")
-skin(launcher,"TextColor3","text");rounded(launcher,8);outline(launcher)
+local launcher=tint(make("TextButton",{Name="MiniLauncher",AnchorPoint=Vector2.new(.5,0),Position=UDim2.new(.5,0,0,6),Size=UDim2.fromOffset(132,28),Visible=false,Text="◆  DECAY HUB",Font=Enum.Font.GothamBold,TextSize=10,AutoButtonColor=false,BorderSizePixel=0},screen),"side")
+skin(launcher,"TextColor3","text");rounded(launcher,14);outline(launcher)
+local loading=true
 local function openHub()
-    if not authenticated then return end
+    if not authenticated or loading then return end
     window.Visible=true;launcher.Visible=false
     window.Position=UDim2.fromScale(.5,.53)
     window.BackgroundTransparency=.35
@@ -1714,11 +1757,13 @@ local dragging=false;local pointer;local origin;local windowOrigin
 local function validDrag(input)
     return input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch
 end
-top.InputBegan:Connect(function(input)
-    if validDrag(input) then
-        dragging=true;pointer=input;origin=input.Position;windowOrigin=window.Position
-    end
-end)
+for _,handle in ipairs({top,sideHead}) do
+    handle.InputBegan:Connect(function(input)
+        if validDrag(input) then
+            dragging=true;pointer=input;origin=input.Position;windowOrigin=window.Position
+        end
+    end)
+end
 on(UIS.InputChanged,function(input)
     if not dragging then return end
     if input.UserInputType==Enum.UserInputType.MouseMovement or input==pointer then
@@ -1757,6 +1802,110 @@ on(UIS.InputBegan,function(input,handled)
         if window.Visible then minimizeHub() else openHub() end
     end
 end)
-openHub()
-notify("Welcome, "..player.DisplayName.." ✦")
+-- ================================================================
+-- LOADING SCREEN (plays once before the hub opens)
+-- Change the two strings below to change what the loader says.
+-- ================================================================
+local LOADING_TITLE="DECAY HUB"
+local LOADING_SUBTITLE="Preparing your interface"
+local LOADING_STEPS={
+    {0,"Initializing"},
+    {.25,"Loading modules"},
+    {.5,"Building interface"},
+    {.75,"Syncing settings"},
+    {.92,"Almost ready"},
+}
+local function runLoader()
+    local Lighting=game:GetService("Lighting")
+    local blur=make("BlurEffect",{Name="DecayHubBlur",Size=0},Lighting)
+    screen.Destroying:Connect(function() pcall(function() blur:Destroy() end) end)
+    animate(blur,{Size=24},.6)
+
+    local loader=make("CanvasGroup",{Name="Loader",Size=UDim2.fromScale(1,1),BackgroundColor3=Color3.fromRGB(6,8,14),BackgroundTransparency=.08,BorderSizePixel=0,GroupTransparency=1,ZIndex=100,Active=true},screen)
+    local content=make("Frame",{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.5),Size=UDim2.fromOffset(320,230),BackgroundTransparency=1},loader)
+    local contentScale=make("UIScale",{Scale=.92},content)
+    animate(loader,{GroupTransparency=0},.45)
+    animate(contentScale,{Scale=1},.6,Enum.EasingStyle.Back)
+
+    -- spinner: faint track + rotating gradient comet + pulsing logo
+    local track=make("Frame",{AnchorPoint=Vector2.new(.5,0),Position=UDim2.new(.5,0,0,0),Size=UDim2.fromOffset(76,76),BackgroundTransparency=1},content)
+    make("UICorner",{CornerRadius=UDim.new(.5,0)},track)
+    make("UIStroke",{Color=theme.line,Thickness=3,Transparency=.35},track)
+    local ring=make("Frame",{AnchorPoint=Vector2.new(.5,0),Position=UDim2.new(.5,0,0,0),Size=UDim2.fromOffset(76,76),BackgroundTransparency=1},content)
+    make("UICorner",{CornerRadius=UDim.new(.5,0)},ring)
+    local ringStroke=make("UIStroke",{Color=Color3.new(1,1,1),Thickness=3},ring)
+    local ringGradient=make("UIGradient",{
+        Color=ColorSequence.new(theme.accent,theme.accent),
+        Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,0),NumberSequenceKeypoint.new(.6,.85),NumberSequenceKeypoint.new(1,1)}),
+    },ringStroke)
+    local logo=make("Frame",{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.new(.5,0,0,38),Size=UDim2.fromOffset(34,34),BackgroundColor3=theme.accent,BorderSizePixel=0},content)
+    make("UICorner",{CornerRadius=UDim.new(0,10)},logo)
+    make("TextLabel",{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,Text="D",Font=Enum.Font.GothamBold,TextSize=18,TextColor3=theme.bg},logo)
+    local pulse=make("UIScale",{Scale=1},logo)
+    TweenService:Create(pulse,TweenInfo.new(.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Scale=1.14}):Play()
+
+    -- title: letters fade in one by one
+    local titleRow=make("Frame",{AnchorPoint=Vector2.new(.5,0),Position=UDim2.new(.5,0,0,96),Size=UDim2.fromOffset(0,34),AutomaticSize=Enum.AutomaticSize.X,BackgroundTransparency=1},content)
+    make("UIListLayout",{FillDirection=Enum.FillDirection.Horizontal,HorizontalAlignment=Enum.HorizontalAlignment.Center,VerticalAlignment=Enum.VerticalAlignment.Center,Padding=UDim.new(0,3),SortOrder=Enum.SortOrder.LayoutOrder},titleRow)
+    local letters={}
+    for _,cp in utf8.codes(LOADING_TITLE) do
+        local ch=utf8.char(cp)
+        local props={LayoutOrder=#letters+1,Size=UDim2.fromOffset(0,34),BackgroundTransparency=1,Text=ch,Font=Enum.Font.GothamBold,TextSize=28,TextColor3=theme.text,TextTransparency=1}
+        if ch==" " then props.Size=UDim2.fromOffset(12,34) else props.AutomaticSize=Enum.AutomaticSize.X end
+        letters[#letters+1]=make("TextLabel",props,titleRow)
+    end
+    for i,l in ipairs(letters) do
+        task.delay(.35+.06*i,function() if l.Parent then animate(l,{TextTransparency=0},.35) end end)
+    end
+
+    local subtitle=make("TextLabel",{AnchorPoint=Vector2.new(.5,0),Position=UDim2.new(.5,0,0,136),Size=UDim2.fromOffset(300,18),BackgroundTransparency=1,Text=LOADING_SUBTITLE,Font=Enum.Font.Gotham,TextSize=12,TextColor3=theme.muted,TextTransparency=1},content)
+    task.delay(.9,function() if subtitle.Parent then animate(subtitle,{TextTransparency=0},.4) end end)
+
+    -- progress bar + status line
+    local barBack=make("Frame",{AnchorPoint=Vector2.new(.5,0),Position=UDim2.new(.5,0,0,176),Size=UDim2.fromOffset(260,4),BackgroundColor3=theme.elevated,BorderSizePixel=0},content)
+    make("UICorner",{CornerRadius=UDim.new(0,2)},barBack)
+    local fill=make("Frame",{Size=UDim2.fromScale(0,1),BackgroundColor3=theme.accent,BorderSizePixel=0},barBack)
+    make("UICorner",{CornerRadius=UDim.new(0,2)},fill)
+    make("UIGradient",{Color=ColorSequence.new(theme.accent,Color3.new(1,1,1))},fill)
+    local statusText=make("TextLabel",{Position=UDim2.new(.5,-130,0,186),Size=UDim2.fromOffset(200,16),BackgroundTransparency=1,Text=LOADING_STEPS[1][2],Font=Enum.Font.Gotham,TextSize=10,TextColor3=theme.muted,TextXAlignment=Enum.TextXAlignment.Left},content)
+    local percent=make("TextLabel",{Position=UDim2.new(.5,50,0,186),Size=UDim2.fromOffset(80,16),BackgroundTransparency=1,Text="0%",Font=Enum.Font.GothamBold,TextSize=10,TextColor3=theme.accent,TextXAlignment=Enum.TextXAlignment.Right},content)
+
+    local DURATION=3.4
+    local startTime=os.clock()
+    local finished=false
+    local lastStep=0
+    local conn
+    conn=RunService.RenderStepped:Connect(function()
+        local t=math.clamp((os.clock()-startTime)/DURATION,0,1)
+        local p=TweenService:GetValue(t,Enum.EasingStyle.Quart,Enum.EasingDirection.InOut)
+        fill.Size=UDim2.fromScale(p,1)
+        percent.Text=("%d%%"):format(math.floor(p*100))
+        ringGradient.Rotation=(os.clock()*320)%360
+        for i=#LOADING_STEPS,1,-1 do
+            if p>=LOADING_STEPS[i][1] then
+                if i~=lastStep then lastStep=i;statusText.Text=LOADING_STEPS[i][2] end
+                break
+            end
+        end
+        if t>=1 then finished=true;conn:Disconnect() end
+    end)
+    conns[#conns+1]=conn
+    while not finished and screen.Parent do task.wait() end
+    statusText.Text="Ready"
+
+    task.wait(.35)
+    animate(contentScale,{Scale=1.12},.5)
+    animate(loader,{GroupTransparency=1},.5)
+    animate(blur,{Size=0},.5)
+    task.wait(.55)
+    loader:Destroy()
+    blur:Destroy()
+end
+local okLoader,loaderErr=pcall(runLoader)
+if not okLoader then warn("[DecayHub] loader:",loaderErr) end
+loading=false
+if screen.Parent then
+    openHub()
+    notify("Welcome, "..player.DisplayName.." ✦")
+end
 print("[DecayHub] V3 minimal ready")
