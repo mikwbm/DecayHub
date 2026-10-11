@@ -465,7 +465,8 @@ local function newEntry(bucket, inst, displayName, color, extra)
         Size = UDim2.fromOffset(0, 1), Visible = false, ZIndex = 0,
     }, layer)
     local e = { Name = displayName, Part = part, Highlight = highlight,
-        Billboard = billboard, Label = text, Tracer = tracer, BaseColor = color }
+        Billboard = billboard, Label = text, Tracer = tracer, BaseColor = color,
+        Inst = inst, Hidden = true }
     for k, v in pairs(extra or {}) do e[k] = v end
     bucket[inst] = e
     return e
@@ -479,6 +480,9 @@ local function removeEntry(bucket, inst)
     bucket[inst] = nil
 end
 local function hideEntry(e)
+    if e.Hidden then return end
+    e.Hidden = true
+    e.NextText = 0 -- rebuild the text immediately next time it shows
     e.Highlight.Enabled = false
     e.Billboard.Enabled = false
     e.Tracer.Visible = false
@@ -523,8 +527,29 @@ local function drawTracer(gui, from, to)
     gui.Rotation = math.deg(math.atan2(d.Y, d.X))
     gui.Visible = true
 end
-local function drawEntry(e, active, cfg, origin, screenBottom, cam)
-    if not active or not e.Part or not e.Part.Parent then
+local HIGHLIGHT_LIMIT = 28 -- Roblox only renders ~31 Highlights at once; extras silently disappear
+local highlightBudget = 0
+local function drawEntry(e, active, cfg, origin, screenBottom, cam, now)
+    if not active then
+        hideEntry(e)
+        return false
+    end
+    -- Self-heal characters: respawns / streaming can swap their parts.
+    if e.IsChar and now >= (e.NextCheck or 0) then
+        e.NextCheck = now + 0.25
+        local model = e.Inst
+        if not model.Parent then
+            hideEntry(e)
+            return false
+        end
+        local root = model:FindFirstChild("HumanoidRootPart")
+        if root and root ~= e.Part then
+            e.Part = root
+            local head = model:FindFirstChild("Head")
+            e.Billboard.Adornee = (head and head:IsA("BasePart")) and head or root
+        end
+    end
+    if not e.Part or not e.Part.Parent then
         hideEntry(e)
         return false
     end
@@ -533,31 +558,43 @@ local function drawEntry(e, active, cfg, origin, screenBottom, cam)
         hideEntry(e)
         return false
     end
-    e.Highlight.Enabled = cfg.ShowHighlight
-    e.Highlight.FillTransparency = ESP.Options.FillTransparency
-    local showHealth = cfg.ShowHealth and e.Humanoid ~= nil
-    local contents = {}
-    if cfg.ShowName then table.insert(contents, e.Name) end
-    if cfg.ShowDistance then table.insert(contents, ("[%d studs]"):format(dist)) end
-    if showHealth and e.Humanoid then
-        table.insert(contents, ("%d / %d HP"):format(e.Humanoid.Health, e.Humanoid.MaxHealth))
+    e.Hidden = false
+
+    local wantHighlight = cfg.ShowHighlight and highlightBudget > 0
+    if wantHighlight then highlightBudget -= 1 end
+    local hl = e.Highlight
+    if hl.Enabled ~= wantHighlight then hl.Enabled = wantHighlight end
+    if wantHighlight and hl.FillTransparency ~= ESP.Options.FillTransparency then
+        hl.FillTransparency = ESP.Options.FillTransparency
     end
-    if cfg.ShowHotbar and e.Owner and cam then
-        local visible = not cfg.HotbarLookOnly
-            or isLookingAt(cam, e.Part.Position, cfg.MaxDistance, cfg.HotbarLookThreshold)
-        if visible then
-            -- Re-read the inventory at most ~3x per second per player.
-            local now = os.clock()
-            if not e.HotbarCache or now - (e.HotbarTime or 0) > 0.3 then
-                e.HotbarCache = readHotbar(e.Owner)
-                e.HotbarTime = now
-            end
-            table.insert(contents, "— HOTBAR —")
-            for _, line in ipairs(e.HotbarCache) do table.insert(contents, line) end
+
+    -- Text is rebuilt ~10x per second instead of every frame (big saving near bases).
+    if now >= (e.NextText or 0) then
+        e.NextText = now + 0.1
+        local showHealth = cfg.ShowHealth and e.Humanoid ~= nil
+        local contents = {}
+        if cfg.ShowName then table.insert(contents, e.Name) end
+        if cfg.ShowDistance then table.insert(contents, ("[%d studs]"):format(dist)) end
+        if showHealth and e.Humanoid then
+            table.insert(contents, ("%d / %d HP"):format(e.Humanoid.Health, e.Humanoid.MaxHealth))
         end
+        if cfg.ShowHotbar and e.Owner and cam then
+            local visible = not cfg.HotbarLookOnly
+                or isLookingAt(cam, e.Part.Position, cfg.MaxDistance, cfg.HotbarLookThreshold)
+            if visible then
+                if not e.HotbarCache or now - (e.HotbarTime or 0) > 0.3 then
+                    e.HotbarCache = readHotbar(e.Owner)
+                    e.HotbarTime = now
+                end
+                table.insert(contents, "— HOTBAR —")
+                for _, line in ipairs(e.HotbarCache) do table.insert(contents, line) end
+            end
+        end
+        local textOn = #contents > 0
+        if e.Billboard.Enabled ~= textOn then e.Billboard.Enabled = textOn end
+        e.Label.Text = table.concat(contents, "\n")
     end
-    e.Billboard.Enabled = #contents > 0
-    e.Label.Text = table.concat(contents, "\n")
+
     if cfg.ShowTracers and cam then
         local p, onScreen = cam:WorldToViewportPoint(e.Part.Position)
         if onScreen then
@@ -565,7 +602,7 @@ local function drawEntry(e, active, cfg, origin, screenBottom, cam)
         else
             e.Tracer.Visible = false
         end
-    else
+    elseif e.Tracer.Visible then
         e.Tracer.Visible = false
     end
     return true
@@ -764,33 +801,103 @@ local function scanOres()
     oreStats.Text = spawns and ("%d deposits · %d types"):format(count, oreTypeCount)
         or "Waiting for OreSpawns"
 end
-local function scanClaims()
-    local built = workspace:FindFirstChild("PlayerBuiltStructures")
-    local deployables = built and built:FindFirstChild("Deployables")
-    local seen, count = {}, 0
-    local perType = {}
-    if deployables then
-        for _, obj in ipairs(deployables:GetDescendants()) do
-            local color = BASE_COLORS[obj.Name]
-            if color and (obj:IsA("Model") or obj:IsA("BasePart")) then
-                seen[obj] = true
-                count += 1
-                perType[obj.Name] = (perType[obj.Name] or 0) + 1
-                if not claimEntries[obj] then
-                    newEntry(claimEntries, obj, obj.Name, color)
-                end
-            end
-        end
-    end
-    for obj in pairs(claimEntries) do
-        if not seen[obj] or not obj:IsDescendantOf(workspace) then
-            removeEntry(claimEntries, obj)
-        end
-    end
-    totalClaims = count
+-- Base ESP is event driven: we hook Deployables once instead of walking every
+-- descendant of every base every couple of seconds (that was the lag near bases).
+local deployFolder, deployConns = nil, {}
+local baseCounts, pendingBase = {}, {}
+local function updateBaseStats()
+    local total = 0
+    for _, n in pairs(baseCounts) do total += n end
+    totalClaims = total
     claimStats.Text = ("%d claims · %d flame · %d shotgun · %d crates"):format(
-        perType["Base Claim"] or 0, perType["Flame Turret"] or 0,
-        perType["Shotgun Trap"] or 0, perType["Wooden Crate"] or 0)
+        baseCounts["Base Claim"] or 0, baseCounts["Flame Turret"] or 0,
+        baseCounts["Shotgun Trap"] or 0, baseCounts["Wooden Crate"] or 0)
+end
+local function hasTrackedAncestor(obj)
+    local p = obj.Parent
+    while p and p ~= deployFolder do
+        if claimEntries[p] then return true end
+        p = p.Parent
+    end
+    return false
+end
+local function trackDeployable(obj)
+    local color = BASE_COLORS[obj.Name]
+    if not color then return true end
+    if not (obj:IsA("Model") or obj:IsA("BasePart")) then return true end
+    if claimEntries[obj] or hasTrackedAncestor(obj) then return true end
+    if newEntry(claimEntries, obj, obj.Name, color) then
+        baseCounts[obj.Name] = (baseCounts[obj.Name] or 0) + 1
+        return true
+    end
+    return false -- parts have not replicated yet; retried by maintainBase
+end
+local function untrackDeployable(obj)
+    local e = claimEntries[obj]
+    if e then
+        baseCounts[e.Name] = math.max(0, (baseCounts[e.Name] or 1) - 1)
+        removeEntry(claimEntries, obj)
+    end
+    pendingBase[obj] = nil
+end
+local function hookDeployables()
+    local built = workspace:FindFirstChild("PlayerBuiltStructures")
+    local folder = built and built:FindFirstChild("Deployables")
+    if folder == deployFolder and (folder == nil or folder.Parent) then return end
+    for _, c in ipairs(deployConns) do pcall(function() c:Disconnect() end) end
+    table.clear(deployConns)
+    for obj in pairs(claimEntries) do removeEntry(claimEntries, obj) end
+    table.clear(baseCounts)
+    table.clear(pendingBase)
+    deployFolder = folder
+    if not folder then
+        updateBaseStats()
+        return
+    end
+    table.insert(deployConns, folder.DescendantAdded:Connect(function(obj)
+        if not trackDeployable(obj) then pendingBase[obj] = true end
+    end))
+    table.insert(deployConns, folder.DescendantRemoving:Connect(untrackDeployable))
+    task.spawn(function()
+        local n = 0
+        for _, obj in ipairs(folder:GetDescendants()) do
+            if folder ~= deployFolder then return end
+            if not trackDeployable(obj) then pendingBase[obj] = true end
+            n += 1
+            if n % 300 == 0 then task.wait() end -- never freeze a frame on big servers
+        end
+        updateBaseStats()
+    end)
+end
+local function maintainBase()
+    hookDeployables()
+    for obj in pairs(pendingBase) do
+        if not obj.Parent or trackDeployable(obj) then pendingBase[obj] = nil end
+    end
+    updateBaseStats()
+end
+local function scanClaims() -- used by the RESCAN button: rebuild from scratch
+    deployFolder = nil
+    maintainBase()
+end
+-- NPC index: events instead of walking the whole workspace every second
+local npcSet, npcConns, npcIndexed = {}, {}, false
+local function indexNpcs()
+    if npcIndexed then return end
+    npcIndexed = true
+    local function consider(inst)
+        if inst:IsA("Humanoid") then npcSet[inst] = true end
+    end
+    table.insert(npcConns, workspace.DescendantAdded:Connect(consider))
+    table.insert(npcConns, workspace.DescendantRemoving:Connect(function(inst) npcSet[inst] = nil end))
+    task.spawn(function()
+        local n = 0
+        for _, d in ipairs(workspace:GetDescendants()) do
+            consider(d)
+            n += 1
+            if n % 1000 == 0 then task.wait() end
+        end
+    end)
 end
 local function scanPlayers()
     local seen, playerCount, npcCount = {}, 0, 0
@@ -805,7 +912,7 @@ local function scanPlayers()
         if not playerEntries[model] then
             local entry = newEntry(playerEntries, model, owner and owner.DisplayName or model.Name,
                 owner and Color3.fromRGB(232, 176, 74) or Color3.fromRGB(120, 170, 255),
-                {Humanoid = hum, IsPlayer = owner ~= nil, Owner = owner})
+                {Humanoid = hum, IsPlayer = owner ~= nil, Owner = owner, IsChar = true})
             if entry then
                 -- Text floats above the head: tall billboard, label fills only the top
                 -- half and is bottom-aligned, so the text grows upward and never
@@ -824,8 +931,9 @@ local function scanPlayers()
         if other ~= player then include(other.Character) end
     end
     if ESP.Players.IncludeNPCs then
-        for _, descendant in ipairs(workspace:GetDescendants()) do
-            if descendant:IsA("Humanoid") then include(descendant.Parent) end
+        indexNpcs()
+        for hum in pairs(npcSet) do
+            if hum.Parent then include(hum.Parent) end
         end
     end
     for model in pairs(playerEntries) do
@@ -848,16 +956,26 @@ local overlayConn = RunService.RenderStepped:Connect(function()
     local origin = getOrigin()
     local viewport = cam.ViewportSize
     local bottom = Vector2.new(viewport.X * 0.5, viewport.Y - 4)
-    for _, e in pairs(oreEntries) do
-        drawEntry(e, ESP.Ores.Enabled and ESP.Ores.SelectedOres[e.Name]
-            and ESP.Ores.Categories[e.Category], ESP.Ores, origin, bottom, cam)
-    end
-    for _, e in pairs(claimEntries) do
-        drawEntry(e, ESP.Claims.Enabled and ESP.Claims.Types[e.Name], ESP.Claims, origin, bottom, cam)
-    end
+    local now = os.clock()
+    -- Players get the Highlight budget first, then bases, then ores, so a base full of
+    -- crates/turrets can never starve the player outlines.
+    highlightBudget = HIGHLIGHT_LIMIT
     for _, e in pairs(playerEntries) do
         drawEntry(e, ESP.Players.Enabled and e.Humanoid and e.Humanoid.Health > 0
-            and (e.IsPlayer or ESP.Players.IncludeNPCs), ESP.Players, origin, bottom, cam)
+            and (e.IsPlayer or ESP.Players.IncludeNPCs), ESP.Players, origin, bottom, cam, now)
+    end
+    local left = highlightBudget
+    local cap = math.min(left, 14)
+    highlightBudget = cap
+    for _, e in pairs(claimEntries) do
+        drawEntry(e, ESP.Claims.Enabled and ESP.Claims.Types[e.Name], ESP.Claims, origin, bottom, cam, now)
+    end
+    left -= cap - highlightBudget
+    cap = math.min(left, 14)
+    highlightBudget = cap
+    for _, e in pairs(oreEntries) do
+        drawEntry(e, ESP.Ores.Enabled and ESP.Ores.SelectedOres[e.Name]
+            and ESP.Ores.Categories[e.Category], ESP.Ores, origin, bottom, cam, now)
     end
     for _, m in ipairs(monumentEntries) do
         local d = (m.Position - origin).Magnitude
@@ -917,7 +1035,7 @@ task.spawn(function()
     while espActive and screen.Parent do
         local ok, err = pcall(function()
             scanOres()
-            scanClaims()
+            maintainBase()
             dashboardOres.Text = tostring(totalOres)
             dashboardTargets.Text = ("%d base · %d players"):format(totalClaims, totalPlayers)
         end)
@@ -929,9 +1047,22 @@ task.spawn(function()
     while espActive and screen.Parent do
         local ok, err = pcall(scanPlayers)
         if not ok then warn("[DecayHub ESP] player scan:", err) end
-        task.wait(1)
+        task.wait(0.5)
     end
 end)
+-- Pick up respawns instantly instead of waiting for the next scan.
+local function hookCharacter(plr)
+    if plr == player then return end
+    on(plr.CharacterAdded, function(char)
+        task.spawn(function()
+            char:WaitForChild("HumanoidRootPart", 5)
+            char:WaitForChild("Humanoid", 5)
+            if espActive and screen.Parent then pcall(scanPlayers) end
+        end)
+    end)
+end
+for _, plr in ipairs(Players:GetPlayers()) do hookCharacter(plr) end
+on(Players.PlayerAdded, hookCharacter)
 task.spawn(function()
     while espActive and screen.Parent and not mapData and mapTryCount < 10 do
         mapTryCount += 1
@@ -948,6 +1079,8 @@ end
 function ESP.Destroy()
     espActive = false
     overlayConn:Disconnect()
+    for _, c in ipairs(deployConns) do pcall(function() c:Disconnect() end) end
+    for _, c in ipairs(npcConns) do pcall(function() c:Disconnect() end) end
     for inst in pairs(oreEntries) do removeEntry(oreEntries, inst) end
     for inst in pairs(claimEntries) do removeEntry(claimEntries, inst) end
     for inst in pairs(playerEntries) do removeEntry(playerEntries, inst) end
