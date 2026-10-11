@@ -1806,7 +1806,7 @@ end)
 -- LOADING SCREEN (plays once before the hub opens)
 -- Change the two strings below to change what the loader says.
 -- ================================================================
-local LOADING_TITLE="DECAY HUB"
+local LOADING_TITLE="XYZ is GAY"
 local LOADING_SUBTITLE="Preparing your interface"
 local LOADING_STEPS={
     {0,"Initializing"},
