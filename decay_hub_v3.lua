@@ -1,4 +1,4 @@
--- TESTDECAY HUB V3 / MINIMAL EDITION
+-- DECAY HUB V3 / MINIMAL EDITION
 -- Single LocalScript. Recommended location: StarterPlayerScripts.
 -- Tabs: Home, Visuals (ESP), Players (ESP), Utility (Auto Harvest + Auto Research), Aim (Aimlock + Hitbox), Config.
 -- No login: the hub opens immediately. RightShift shows / hides the window.
@@ -343,7 +343,16 @@ ESP.Ores = {
 ESP.Claims = {
     Enabled = false, MaxDistance = 1500,
     ShowName = true, ShowDistance = true, ShowHighlight = true, ShowTracers = false,
+    -- Base ESP: each deployable type has its own toggle + colour.
+    Types = { ["Base Claim"] = true, ["Flame Turret"] = true, ["Shotgun Trap"] = true },
 }
+local BASE_TYPES = {
+    {name = "Base Claim",   color = Color3.fromRGB(255, 85, 70)},
+    {name = "Flame Turret", color = Color3.fromRGB(255, 150, 40)},
+    {name = "Shotgun Trap", color = Color3.fromRGB(190, 110, 255)},
+}
+local BASE_COLORS = {}
+for _, t in ipairs(BASE_TYPES) do BASE_COLORS[t.name] = t.color end
 ESP.Players = {
     Enabled = false, MaxDistance = 1500,
     ShowName = true, ShowDistance = true, ShowHealth = true,
@@ -516,12 +525,17 @@ end
 addOptions(visuals, "Ores", ESP.Ores)
 
 -- CLAIMS + MONUMENTS UI
-UI.Title(visuals, "Base Claims")
-local claimStats = statusCard(visuals, "Base Claims", "0 found")
-local _, setClaimEnabled = UI.Toggle(visuals, "Base Claim ESP", "", function(v)
+UI.Title(visuals, "Base ESP")
+local claimStats = statusCard(visuals, "Base targets", "0 found")
+local _, setClaimEnabled = UI.Toggle(visuals, "Base ESP (master)", "", function(v)
     ESP.Claims.Enabled = v
 end)
-addOptions(visuals, "Claims", ESP.Claims)
+for _, t in ipairs(BASE_TYPES) do
+    UI.Toggle(visuals, t.name .. " ESP", "", function(v)
+        ESP.Claims.Types[t.name] = v
+    end, true)
+end
+addOptions(visuals, "Base", ESP.Claims)
 UI.Title(visuals, "Monuments")
 local monumentStats = statusCard(visuals, "Map data", "Waiting for map")
 local _, setMonumentEnabled = UI.Toggle(visuals, "Monument ESP", "", function(v)
@@ -654,13 +668,16 @@ local function scanClaims()
     local built = workspace:FindFirstChild("PlayerBuiltStructures")
     local deployables = built and built:FindFirstChild("Deployables")
     local seen, count = {}, 0
+    local perType = {}
     if deployables then
         for _, obj in ipairs(deployables:GetDescendants()) do
-            if obj.Name == "Base Claim" and (obj:IsA("Model") or obj:IsA("BasePart")) then
+            local color = BASE_COLORS[obj.Name]
+            if color and (obj:IsA("Model") or obj:IsA("BasePart")) then
                 seen[obj] = true
                 count += 1
+                perType[obj.Name] = (perType[obj.Name] or 0) + 1
                 if not claimEntries[obj] then
-                    newEntry(claimEntries, obj, "Base Claim", Color3.fromRGB(255, 85, 70))
+                    newEntry(claimEntries, obj, obj.Name, color)
                 end
             end
         end
@@ -671,7 +688,8 @@ local function scanClaims()
         end
     end
     totalClaims = count
-    claimStats.Text = ("%d detected"):format(count)
+    claimStats.Text = ("%d claims · %d flame · %d shotgun"):format(
+        perType["Base Claim"] or 0, perType["Flame Turret"] or 0, perType["Shotgun Trap"] or 0)
 end
 local function scanPlayers()
     local seen, playerCount, npcCount = {}, 0, 0
@@ -722,7 +740,7 @@ local overlayConn = RunService.RenderStepped:Connect(function()
             and ESP.Ores.Categories[e.Category], ESP.Ores, origin, bottom, cam)
     end
     for _, e in pairs(claimEntries) do
-        drawEntry(e, ESP.Claims.Enabled, ESP.Claims, origin, bottom, cam)
+        drawEntry(e, ESP.Claims.Enabled and ESP.Claims.Types[e.Name], ESP.Claims, origin, bottom, cam)
     end
     for _, e in pairs(playerEntries) do
         drawEntry(e, ESP.Players.Enabled and e.Humanoid and e.Humanoid.Health > 0
@@ -773,7 +791,7 @@ UI.Action(visuals, "Reload monument data", "", function()
     notify(loadMonuments() and "Monument data loaded" or "Map data is not ready")
 end, "RELOAD")
 local dashboardOres = statusCard(dashboard, "Detected ores", "0")
-local dashboardTargets = statusCard(dashboard, "World targets", "0 claims · 0 players")
+local dashboardTargets = statusCard(dashboard, "World targets", "0 base · 0 players")
 UI.Action(dashboard, "Disable all ESP", "", function()
     setOreEnabled(false)
     setClaimEnabled(false)
@@ -788,7 +806,7 @@ task.spawn(function()
             scanOres()
             scanClaims()
             dashboardOres.Text = tostring(totalOres)
-            dashboardTargets.Text = ("%d claims · %d players"):format(totalClaims, totalPlayers)
+            dashboardTargets.Text = ("%d base · %d players"):format(totalClaims, totalPlayers)
         end)
         if not ok then warn("[DecayHub ESP] scan:", err) end
         task.wait(math.max(1, ESP.Options.ScanInterval))
