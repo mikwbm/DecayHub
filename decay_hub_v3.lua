@@ -51,6 +51,7 @@ local ThemePresets = {
     {name="Mono", bg=Color3.fromRGB(12,12,12), side=Color3.fromRGB(18,18,18), card=Color3.fromRGB(25,25,25), elevated=Color3.fromRGB(36,36,36), accent=Color3.fromRGB(235,235,235), text=Color3.fromRGB(245,245,245), muted=Color3.fromRGB(140,140,140), line=Color3.fromRGB(52,52,52)},
 }
 local theme = ThemePresets[1]
+local baseTheme = ThemePresets[1] -- the selected preset (theme becomes a live copy while Rainbow mode is on)
 local bindings = {}
 local conns = {}
 local authenticated = true
@@ -357,7 +358,7 @@ UI.Action(utilities,"Test notification","",function() notify("Decay Hub is ready
 
 UI.Title(settings,"Appearance")
 local function applyTheme(name)
-    for _,preset in ipairs(ThemePresets) do if preset.name==name then theme=preset;break end end
+    for _,preset in ipairs(ThemePresets) do if preset.name==name then theme=preset;baseTheme=preset;break end end
     for i=#bindings,1,-1 do
         local entry=bindings[i]
         if entry.obj.Parent==nil then table.remove(bindings,i)
@@ -386,12 +387,13 @@ ESP.Claims = {
     Enabled = false, MaxDistance = 1500,
     ShowName = true, ShowDistance = true, ShowHighlight = true, ShowTracers = false,
     -- Base ESP: each deployable type has its own toggle + colour.
-    Types = { ["Base Claim"] = true, ["Flame Turret"] = true, ["Shotgun Trap"] = true },
+    Types = { ["Base Claim"] = true, ["Flame Turret"] = true, ["Shotgun Trap"] = true, ["Wooden Crate"] = true },
 }
 local BASE_TYPES = {
     {name = "Base Claim",   color = Color3.fromRGB(255, 85, 70)},
     {name = "Flame Turret", color = Color3.fromRGB(255, 150, 40)},
     {name = "Shotgun Trap", color = Color3.fromRGB(190, 110, 255)},
+    {name = "Wooden Crate", color = Color3.fromRGB(205, 150, 85)},
 }
 local BASE_COLORS = {}
 for _, t in ipairs(BASE_TYPES) do BASE_COLORS[t.name] = t.color end
@@ -463,7 +465,7 @@ local function newEntry(bucket, inst, displayName, color, extra)
         Size = UDim2.fromOffset(0, 1), Visible = false, ZIndex = 0,
     }, layer)
     local e = { Name = displayName, Part = part, Highlight = highlight,
-        Billboard = billboard, Label = text, Tracer = tracer }
+        Billboard = billboard, Label = text, Tracer = tracer, BaseColor = color }
     for k, v in pairs(extra or {}) do e[k] = v end
     bucket[inst] = e
     return e
@@ -786,8 +788,9 @@ local function scanClaims()
         end
     end
     totalClaims = count
-    claimStats.Text = ("%d claims · %d flame · %d shotgun"):format(
-        perType["Base Claim"] or 0, perType["Flame Turret"] or 0, perType["Shotgun Trap"] or 0)
+    claimStats.Text = ("%d claims · %d flame · %d shotgun · %d crates"):format(
+        perType["Base Claim"] or 0, perType["Flame Turret"] or 0,
+        perType["Shotgun Trap"] or 0, perType["Wooden Crate"] or 0)
 end
 local function scanPlayers()
     local seen, playerCount, npcCount = {}, 0, 0
@@ -1333,6 +1336,178 @@ do
 end
 
 -- ================================================================
+-- MODULE: ZOOM  (Utility tab) - hold a key to zoom the camera
+-- ================================================================
+do
+    local Zoom = {
+        Enabled = true,
+        Key = Enum.KeyCode.T,   -- default: hold T
+        Level = 3,              -- zoom multiplier while held
+        Speed = 12,             -- how fast the zoom blends in/out
+        ScaleSens = true,       -- lower mouse sensitivity while zoomed
+    }
+    local holding, capturing = false, false
+    local alpha, baseFov, baseSens, wasZoomed = 0, 70, UIS.MouseDeltaSensitivity, false
+
+    UI.Title(utilities, "Zoom")
+    UI.Toggle(utilities, "Zoom enabled", "", function(v)
+        Zoom.Enabled = v
+        if not v then holding = false end
+    end, Zoom.Enabled)
+    local _, keyButton = UI.ButtonRow(utilities, "Zoom keybind (hold)", Zoom.Key.Name, function(b)
+        capturing = true
+        aimBusy = true -- keeps RightShift from toggling the hub while rebinding
+        b.Text = "press key..."
+    end)
+    UI.Slider(utilities, "Zoom amount", 1.5, 10, Zoom.Level, "x", function(v) Zoom.Level = v end, 0.5)
+    UI.Toggle(utilities, "Lower sensitivity while zoomed", "", function(v) Zoom.ScaleSens = v end, Zoom.ScaleSens)
+
+    local function matches(input)
+        if Zoom.Key.EnumType == Enum.KeyCode then
+            return input.KeyCode == Zoom.Key
+        end
+        return input.UserInputType == Zoom.Key
+    end
+    local function finishCapture()
+        capturing = false
+        holding = false
+        keyButton.Text = Zoom.Key.Name
+        task.defer(function() aimBusy = false end)
+    end
+
+    on(UIS.InputBegan, function(input, processed)
+        if capturing then
+            if input.KeyCode == Enum.KeyCode.Escape then
+                finishCapture()
+                return
+            end
+            if input.UserInputType == Enum.UserInputType.Keyboard then
+                Zoom.Key = input.KeyCode
+            elseif input.UserInputType == Enum.UserInputType.MouseButton2 or input.UserInputType == Enum.UserInputType.MouseButton3 then
+                Zoom.Key = input.UserInputType
+            else
+                return -- ignore left click etc. and keep waiting
+            end
+            finishCapture()
+            return
+        end
+        if processed or not Zoom.Enabled then return end
+        if matches(input) then holding = true end
+    end)
+    on(UIS.InputEnded, function(input)
+        if matches(input) then holding = false end
+    end)
+
+    RunService:BindToRenderStep("DecayHubZoom", Enum.RenderPriority.Camera.Value + 2, function(dt)
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local target = (holding and Zoom.Enabled) and 1 or 0
+        alpha += (target - alpha) * math.clamp(dt * Zoom.Speed, 0, 1)
+        if math.abs(target - alpha) < 0.002 then alpha = target end
+
+        if alpha <= 0 then
+            if wasZoomed then
+                -- finished zooming out: restore exactly what the game had
+                cam.FieldOfView = baseFov
+                UIS.MouseDeltaSensitivity = baseSens
+                wasZoomed = false
+            else
+                baseFov = cam.FieldOfView          -- keep following the game's own FOV
+                baseSens = UIS.MouseDeltaSensitivity
+            end
+            return
+        end
+        wasZoomed = true
+        local zoomed = math.deg(2 * math.atan(math.tan(math.rad(baseFov) / 2) / Zoom.Level))
+        cam.FieldOfView = baseFov + (zoomed - baseFov) * alpha
+        if Zoom.ScaleSens then
+            UIS.MouseDeltaSensitivity = baseSens * (1 + (1 / Zoom.Level - 1) * alpha)
+        else
+            UIS.MouseDeltaSensitivity = baseSens
+        end
+    end)
+
+    screen.Destroying:Connect(function()
+        holding = false
+        pcall(function() RunService:UnbindFromRenderStep("DecayHubZoom") end)
+        if wasZoomed then
+            pcall(function()
+                if workspace.CurrentCamera then workspace.CurrentCamera.FieldOfView = baseFov end
+                UIS.MouseDeltaSensitivity = baseSens
+            end)
+        end
+    end)
+end
+
+-- ================================================================
+-- MODULE: RAINBOW MODE  (Utility tab) - menu + every ESP colour
+-- ================================================================
+do
+    local Rainbow = { Enabled = false, Speed = 4 } -- Speed 1-20 (4 = one full cycle every ~5s)
+    local rainbowTheme = {}
+    local MONUMENT_COLOR = Color3.fromRGB(80, 205, 190)
+
+    UI.Title(utilities, "Rainbow")
+    local function restore()
+        theme = baseTheme
+        for _, entry in ipairs(bindings) do
+            if entry.token == "accent" and entry.obj.Parent then
+                entry.obj[entry.prop] = theme.accent
+            end
+        end
+        for _, bucket in ipairs({oreEntries, claimEntries, playerEntries}) do
+            for _, e in pairs(bucket) do
+                e.Highlight.FillColor = e.BaseColor
+                e.Label.TextColor3 = e.BaseColor
+                e.Tracer.BackgroundColor3 = e.BaseColor
+            end
+        end
+        for _, m in ipairs(monumentEntries) do
+            m.Label.TextColor3 = MONUMENT_COLOR
+            m.Tracer.BackgroundColor3 = MONUMENT_COLOR
+        end
+    end
+    UI.Toggle(utilities, "Rainbow mode (menu + ESP)", "", function(v)
+        Rainbow.Enabled = v
+        if not v then restore() end
+    end, false)
+    UI.Slider(utilities, "Rainbow speed", 1, 20, Rainbow.Speed, "", function(v) Rainbow.Speed = v end)
+
+    on(RunService.RenderStepped, function()
+        if not Rainbow.Enabled then return end
+        -- hue moves at a constant rate => smooth, linear colour cycle
+        local color = Color3.fromHSV((os.clock() * Rainbow.Speed * 0.05) % 1, 0.72, 1)
+
+        -- menu: swap the live theme's accent and repaint every accent-bound element
+        for k, v in pairs(baseTheme) do rainbowTheme[k] = v end
+        rainbowTheme.accent = color
+        theme = rainbowTheme
+        for _, entry in ipairs(bindings) do
+            if entry.token == "accent" and entry.obj.Parent then
+                entry.obj[entry.prop] = color
+            end
+        end
+
+        -- ESP (only entries that are currently drawn, to stay cheap)
+        for _, bucket in ipairs({oreEntries, claimEntries, playerEntries}) do
+            for _, e in pairs(bucket) do
+                if e.Billboard.Enabled or e.Highlight.Enabled or e.Tracer.Visible then
+                    e.Highlight.FillColor = color
+                    e.Label.TextColor3 = color
+                    e.Tracer.BackgroundColor3 = color
+                end
+            end
+        end
+        for _, m in ipairs(monumentEntries) do
+            if m.Label.Visible or m.Tracer.Visible then
+                m.Label.TextColor3 = color
+                m.Tracer.BackgroundColor3 = color
+            end
+        end
+    end)
+end
+
+-- ================================================================
 -- MODULE: AIMLOCK + HITBOX EXPANDER  (Aim tab)
 -- ================================================================
 do
@@ -1806,7 +1981,7 @@ end)
 -- LOADING SCREEN (plays once before the hub opens)
 -- Change the two strings below to change what the loader says.
 -- ================================================================
-local LOADING_TITLE="XYZ is GAY"
+local LOADING_TITLE="DECAY HUB"
 local LOADING_SUBTITLE="Preparing your interface"
 local LOADING_STEPS={
     {0,"Initializing"},
