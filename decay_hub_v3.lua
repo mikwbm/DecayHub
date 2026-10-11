@@ -494,23 +494,101 @@ local function getOrigin()
     return root and root.Position or (cam and cam.CFrame.Position) or Vector3.zero
 end
 -- Hotbar viewer helpers ------------------------------------------------
-local function readHotbar(owner)
-    local data = owner and owner:FindFirstChild("Data")
-    if not data then return {"Loading data..."} end
-    local items = {}
-    for i = ESP.Players.HotbarFirst, ESP.Players.HotbarLast do
-        local slot = data:FindFirstChild("Slot" .. i)
-        local item = slot and slot:FindFirstChild("ItemName")
-        if item and item.Value ~= "" then
-            local text = item.Value
-            local amount = slot:FindFirstChild("Amount")
-            local n = amount and amount:IsA("ValueBase") and tonumber(amount.Value)
-            if n and n > 1 then text ..= " x" .. tostring(n) end
-            table.insert(items, text)
-        end
+-- Icons use the game's item database; no inventory remotes are fired here.
+local HotbarVisual = {Items = nil, SlotSize = 42, Gap = 4, Columns = 6}
+task.spawn(function()
+    local module = ReplicatedStorage:WaitForChild("ItemData", 10)
+    if not module or not espActive then return end
+    local ok, data = pcall(require, module)
+    if ok and type(data) == "table" and type(data.Items) == "table" then
+        HotbarVisual.Items = data.Items
+    else
+        warn("[DecayHub] Hotbar icons unavailable; showing item names instead")
     end
-    if #items == 0 then return {"Empty hotbar"} end
-    return items
+end)
+function HotbarVisual.create(e)
+    if e.HotbarFrame then return end
+    e.HotbarFrame = make("Frame", {
+        Name = "VisualHotbar", BackgroundTransparency = 1,
+        AnchorPoint = Vector2.new(0.5, 1), Visible = false,
+    }, e.Billboard)
+    e.HotbarSlots = {}
+end
+function HotbarVisual.refresh(e, now)
+    HotbarVisual.create(e)
+    local first = math.clamp(math.floor(ESP.Players.HotbarFirst), 1, 60)
+    local last = math.clamp(math.floor(ESP.Players.HotbarLast), 1, 60)
+    local count = math.max(0, last - first + 1)
+    local rows = math.max(1, math.ceil(count / HotbarVisual.Columns))
+    local cols = math.min(math.max(count, 1), HotbarVisual.Columns)
+    local stride = HotbarVisual.SlotSize + HotbarVisual.Gap
+    local width = cols * stride - HotbarVisual.Gap
+    local height = rows * stride - HotbarVisual.Gap
+    e.HotbarFrame.Size = UDim2.fromOffset(width, height)
+    e.HotbarHeight = height
+    if now < (e.HotbarTime or 0) and e.HotbarFirst == first and e.HotbarLast == last then return end
+    e.HotbarTime = now + 0.3
+    e.HotbarFirst, e.HotbarLast = first, last
+    local data = e.Owner and e.Owner:FindFirstChild("Data")
+    for index = 1, count do
+        local cell = e.HotbarSlots[index]
+        if not cell then
+            local frame = make("Frame", {
+                Name = "Slot" .. index, Size = UDim2.fromOffset(42, 42),
+                BackgroundColor3 = Color3.fromRGB(20, 25, 34),
+                BackgroundTransparency = 0.18, BorderSizePixel = 0,
+            }, e.HotbarFrame)
+            rounded(frame, 5)
+            make("UIStroke", {Color = Color3.fromRGB(75, 130, 180),
+                Thickness = 1, Transparency = 0.35}, frame)
+            local icon = make("ImageLabel", {
+                Name = "ItemIcon", BackgroundTransparency = 1,
+                Position = UDim2.fromOffset(3, 3), Size = UDim2.new(1, -6, 1, -6),
+                ScaleType = Enum.ScaleType.Fit, Image = "", ZIndex = 2,
+            }, frame)
+            local fallback = make("TextLabel", {
+                BackgroundTransparency = 1, Position = UDim2.fromOffset(3, 9),
+                Size = UDim2.new(1, -6, 1, -13), Text = "", TextWrapped = true,
+                TextSize = 10, Font = Enum.Font.GothamMedium,
+                TextColor3 = Color3.fromRGB(225, 233, 245), ZIndex = 2,
+            }, frame)
+            local quantity = make("TextLabel", {
+                BackgroundTransparency = 1, Position = UDim2.new(0, 2, 1, -16),
+                Size = UDim2.new(1, -5, 0, 14), Text = "",
+                TextXAlignment = Enum.TextXAlignment.Right, TextSize = 11,
+                Font = Enum.Font.GothamBold, TextColor3 = Color3.new(1, 1, 1),
+                TextStrokeTransparency = 0.2, ZIndex = 3,
+            }, frame)
+            make("TextLabel", {
+                BackgroundTransparency = 1, Position = UDim2.fromOffset(3, 1),
+                Size = UDim2.fromOffset(14, 12), Text = tostring(index),
+                TextSize = 9, Font = Enum.Font.Gotham,
+                TextColor3 = Color3.fromRGB(150, 170, 190), ZIndex = 3,
+            }, frame)
+            cell = {Frame = frame, Icon = icon, Fallback = fallback, Quantity = quantity}
+            e.HotbarSlots[index] = cell
+        end
+        cell.Frame.Position = UDim2.fromOffset(((index - 1) % HotbarVisual.Columns) * stride,
+            math.floor((index - 1) / HotbarVisual.Columns) * stride)
+        local slot = data and data:FindFirstChild("Slot" .. (first + index - 1))
+        local item = slot and slot:FindFirstChild("ItemName")
+        local name = item and item:IsA("StringValue") and item.Value or ""
+        local amount = slot and slot:FindFirstChild("Amount")
+        local n = amount and amount:IsA("ValueBase") and tonumber(amount.Value)
+        local info = HotbarVisual.Items and HotbarVisual.Items[name]
+        local image = type(info) == "table" and info.Image or ""
+        if type(image) == "number" then image = "rbxassetid://" .. tostring(image) end
+        if type(image) ~= "string" then image = "" end
+        cell.Icon.Image = image
+        cell.Icon.Visible = name ~= "" and image ~= ""
+        cell.Fallback.Text = name ~= "" and image == "" and name
+            or (not slot and "?" or "")
+        cell.Quantity.Text = name ~= "" and n and n > 1 and tostring(n) or ""
+    end
+    for index = #e.HotbarSlots, count + 1, -1 do
+        e.HotbarSlots[index].Frame:Destroy()
+        e.HotbarSlots[index] = nil
+    end
 end
 local function isLookingAt(cam, pos, maxDist, threshold)
     local diff = pos - cam.CFrame.Position
@@ -578,19 +656,24 @@ local function drawEntry(e, active, cfg, origin, screenBottom, cam, now)
         if showHealth and e.Humanoid then
             table.insert(contents, ("%d / %d HP"):format(e.Humanoid.Health, e.Humanoid.MaxHealth))
         end
-        if cfg.ShowHotbar and e.Owner and cam then
-            local visible = not cfg.HotbarLookOnly
-                or isLookingAt(cam, e.Part.Position, cfg.MaxDistance, cfg.HotbarLookThreshold)
-            if visible then
-                if not e.HotbarCache or now - (e.HotbarTime or 0) > 0.3 then
-                    e.HotbarCache = readHotbar(e.Owner)
-                    e.HotbarTime = now
-                end
-                table.insert(contents, "— HOTBAR —")
-                for _, line in ipairs(e.HotbarCache) do table.insert(contents, line) end
+        local hotbarOn = cfg.ShowHotbar and e.Owner ~= nil and cam ~= nil
+            and (not cfg.HotbarLookOnly
+                or isLookingAt(cam, e.Part.Position, cfg.MaxDistance, cfg.HotbarLookThreshold))
+        if hotbarOn then HotbarVisual.refresh(e, now) end
+        if e.HotbarFrame then e.HotbarFrame.Visible = hotbarOn == true end
+        if e.IsChar then
+            local textHeight = math.max(1, #contents * 16 + 4)
+            local hotbarHeight = hotbarOn and (e.HotbarHeight + 8) or 0
+            -- Both end above the head; the icon row sits directly above the ESP text.
+            e.Billboard.Size = UDim2.fromOffset(280, math.max(180, 2 * (textHeight + hotbarHeight + 4)))
+            e.Label.AnchorPoint = Vector2.new(0.5, 1)
+            e.Label.Position = UDim2.fromScale(0.5, 0.5)
+            e.Label.Size = UDim2.fromOffset(220, textHeight)
+            if e.HotbarFrame then
+                e.HotbarFrame.Position = UDim2.new(0.5, 0, 0.5, -textHeight - 8)
             end
         end
-        local textOn = #contents > 0
+        local textOn = #contents > 0 or hotbarOn
         if e.Billboard.Enabled ~= textOn then e.Billboard.Enabled = textOn end
         e.Label.Text = table.concat(contents, "\n")
     end
