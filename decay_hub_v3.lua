@@ -357,6 +357,9 @@ ESP.Players = {
     Enabled = false, MaxDistance = 1500,
     ShowName = true, ShowDistance = true, ShowHealth = true,
     ShowHighlight = true, ShowTracers = false, IncludeNPCs = false,
+    -- Hotbar viewer (inventory slots read from player.Data.SlotN)
+    ShowHotbar = true, HotbarLookOnly = true, HotbarLookThreshold = 0.90,
+    HotbarFirst = 25, HotbarLast = 30,
 }
 ESP.Monuments = {
     Enabled = false, MaxDistance = 6000,
@@ -442,6 +445,33 @@ local function getOrigin()
     local cam = workspace.CurrentCamera
     return root and root.Position or (cam and cam.CFrame.Position) or Vector3.zero
 end
+-- Hotbar viewer helpers ------------------------------------------------
+local function readHotbar(owner)
+    local data = owner and owner:FindFirstChild("Data")
+    if not data then return {"Loading data..."} end
+    local items = {}
+    for i = ESP.Players.HotbarFirst, ESP.Players.HotbarLast do
+        local slot = data:FindFirstChild("Slot" .. i)
+        local item = slot and slot:FindFirstChild("ItemName")
+        if item and item.Value ~= "" then
+            local text = item.Value
+            local amount = slot:FindFirstChild("Amount")
+            local n = amount and amount:IsA("ValueBase") and tonumber(amount.Value)
+            if n and n > 1 then text ..= " x" .. tostring(n) end
+            table.insert(items, text)
+        end
+    end
+    if #items == 0 then return {"Empty hotbar"} end
+    return items
+end
+local function isLookingAt(cam, pos, maxDist, threshold)
+    local diff = pos - cam.CFrame.Position
+    local dist = diff.Magnitude
+    if dist > maxDist or dist < 0.1 then return false end
+    if cam.CFrame.LookVector:Dot(diff.Unit) < threshold then return false end
+    local sp, onScreen = cam:WorldToViewportPoint(pos)
+    return onScreen and sp.Z > 0
+end
 local function drawTracer(gui, from, to)
     local d = to - from
     gui.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
@@ -462,13 +492,27 @@ local function drawEntry(e, active, cfg, origin, screenBottom, cam)
     e.Highlight.Enabled = cfg.ShowHighlight
     e.Highlight.FillTransparency = ESP.Options.FillTransparency
     local showHealth = cfg.ShowHealth and e.Humanoid ~= nil
-    e.Billboard.Enabled = cfg.ShowName or cfg.ShowDistance or showHealth
     local contents = {}
     if cfg.ShowName then table.insert(contents, e.Name) end
     if cfg.ShowDistance then table.insert(contents, ("[%d studs]"):format(dist)) end
     if showHealth and e.Humanoid then
         table.insert(contents, ("%d / %d HP"):format(e.Humanoid.Health, e.Humanoid.MaxHealth))
     end
+    if cfg.ShowHotbar and e.Owner and cam then
+        local visible = not cfg.HotbarLookOnly
+            or isLookingAt(cam, e.Part.Position, cfg.MaxDistance, cfg.HotbarLookThreshold)
+        if visible then
+            -- Re-read the inventory at most ~3x per second per player.
+            local now = os.clock()
+            if not e.HotbarCache or now - (e.HotbarTime or 0) > 0.3 then
+                e.HotbarCache = readHotbar(e.Owner)
+                e.HotbarTime = now
+            end
+            table.insert(contents, "— HOTBAR —")
+            for _, line in ipairs(e.HotbarCache) do table.insert(contents, line) end
+        end
+    end
+    e.Billboard.Enabled = #contents > 0
     e.Label.Text = table.concat(contents, "\n")
     if cfg.ShowTracers and cam then
         local p, onScreen = cam:WorldToViewportPoint(e.Part.Position)
@@ -554,6 +598,18 @@ local _, setPlayerEnabled = UI.Toggle(playersPage, "Player ESP", "", function(v)
 end)
 UI.Toggle(playersPage, "Include NPCs", "", function(v)
     ESP.Players.IncludeNPCs = v
+end)
+UI.Toggle(playersPage, "Hotbar viewer", "", function(v)
+    ESP.Players.ShowHotbar = v
+end, ESP.Players.ShowHotbar)
+UI.Toggle(playersPage, "Hotbar only when looking", "", function(v)
+    ESP.Players.HotbarLookOnly = v
+end, ESP.Players.HotbarLookOnly)
+UI.Stepper(playersPage, "Hotbar first slot", 1, 60, 1, ESP.Players.HotbarFirst, function(v)
+    ESP.Players.HotbarFirst = v
+end)
+UI.Stepper(playersPage, "Hotbar last slot", 1, 60, 1, ESP.Players.HotbarLast, function(v)
+    ESP.Players.HotbarLast = v
 end)
 addOptions(playersPage, "Players", ESP.Players)
 
@@ -702,9 +758,21 @@ local function scanPlayers()
         seen[model] = true
         if owner then playerCount += 1 else npcCount += 1 end
         if not playerEntries[model] then
-            newEntry(playerEntries, model, owner and owner.DisplayName or model.Name,
+            local entry = newEntry(playerEntries, model, owner and owner.DisplayName or model.Name,
                 owner and Color3.fromRGB(232, 176, 74) or Color3.fromRGB(120, 170, 255),
-                {Humanoid = hum, IsPlayer = owner ~= nil})
+                {Humanoid = hum, IsPlayer = owner ~= nil, Owner = owner})
+            if entry then
+                -- Text floats above the head: tall billboard, label fills only the top
+                -- half and is bottom-aligned, so the text grows upward and never
+                -- covers the body / highlight.
+                local head = model:FindFirstChild("Head")
+                entry.Billboard.Adornee = (head and head:IsA("BasePart")) and head or entry.Part
+                entry.Billboard.Size = UDim2.fromOffset(220, 340)
+                entry.Billboard.StudsOffset = Vector3.new(0, 2.2, 0)
+                entry.Label.Position = UDim2.fromScale(0, 0)
+                entry.Label.Size = UDim2.fromScale(1, 0.5)
+                entry.Label.TextYAlignment = Enum.TextYAlignment.Bottom
+            end
         end
     end
     for _, other in ipairs(Players:GetPlayers()) do
